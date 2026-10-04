@@ -1,27 +1,87 @@
-# OpenReply — Local Development Services
-# Run: docker-compose up -d
+# OpenReply — web, message worker, scheduler, database, Redis, and HTTPS proxy
+# Run: docker compose up -d
+# Configure .env, then run: docker compose up -d --build
+
+x-app: &app
+  image: openreply-app:local
+  build: .
+  restart: unless-stopped
+  init: true
+  env_file: .env
+  environment:
+    DATABASE_URL: ${DOCKER_DATABASE_URL:?Set DOCKER_DATABASE_URL in .env using postgres as host}
+    REDIS_URL: redis://redis:6379
+    AUTH_TRUST_HOST: "true"
+  stop_grace_period: 30s
 
 services:
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["npm", "run", "db:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(async r=>{const h=await r.json();process.exit(h.checks.database.status==='ok'&&h.checks.redis.status==='ok'?0:1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+
+  worker:
+    <<: *app
+    command: ["./node_modules/.bin/tsx", "worker/dm-worker.ts"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "scripts/worker-health.cjs"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+
+  cron:
+    <<: *app
+    command: ["sh", "scripts/cron.sh"]
+    depends_on:
+      web:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: openreply
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-openreply}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -30,6 +90,17 @@ services:
       timeout: 5s
       retries: 5
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
   redisdata:
+  caddy_data:
+  caddy_config:

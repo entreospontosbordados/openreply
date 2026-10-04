@@ -1,0 +1,3 @@
+openreply.vps12022.panel.icontainer.work {
+    reverse_proxy 127.0.0.1:3001
+}

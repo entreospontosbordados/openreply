@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  allowedDevOrigins: ["openreply.vps12022.panel.icontainer.work"],
   reactCompiler: true,
   turbopack: {
     root: process.cwd(),

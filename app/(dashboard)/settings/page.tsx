@@ -3,6 +3,7 @@
 import LanguageSwitcher from "@/components/language-switcher";
 import { useI18n } from "@/lib/i18n/provider";
 import { Suspense, useEffect, useState } from "react";
+import { signOut } from "next-auth/react";
 import type { AccountOption } from "@/components/account-select";
 import { ZernioConnection } from "@/components/zernio-connection";
 import { InstagramConnectNotice } from "@/components/instagram-connect-notice";
@@ -61,6 +62,20 @@ export default function SettingsPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
   const [memberError, setMemberError] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState(false);
+
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError(false);
+    try {
+      await signOut({ redirectTo: "/login" });
+    } catch {
+      setSignOutError(true);
+      setSigningOut(false);
+    }
+  }
 
   useEffect(() => {
     Promise.all([
@@ -350,6 +365,23 @@ export default function SettingsPage() {
             {data?.workspace.dmsSentThisPeriod ?? 0}
           </span>
         </div>
+      </section>
+
+      <section className="panel rounded p-4 sm:p-6 space-y-3">
+        <h2 className="text-base font-semibold">{t("Session")}</h2>
+        <button
+          type="button"
+          onClick={handleSignOut}
+          disabled={signingOut}
+          className="inline-flex items-center justify-center rounded border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-border-hover hover:bg-surface disabled:opacity-50"
+        >
+          {signingOut ? t("Signing out...") : t("Sign out")}
+        </button>
+        {signOutError && (
+          <p role="alert" className="text-sm text-error">
+            {t("Could not sign out. Please try again.")}
+          </p>
+        )}
       </section>
     </div>
   );

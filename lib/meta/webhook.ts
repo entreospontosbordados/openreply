@@ -36,6 +36,7 @@ export interface WebhookCommentEvent {
   instagramAccountId: string;
   commentId: string;
   commentText: string;
+  commentCreatedAt?: string;
   commenterId: string;
   commenterName?: string;
   mediaId: string;
@@ -55,6 +56,7 @@ interface WebhookEntry {
     value: {
       id?: string;
       comment_id?: string;
+      timestamp?: string;
       text?: string;
       from?: {
         id?: string;
@@ -150,6 +152,8 @@ export function parseCommentEvents(payload: WebhookPayload): WebhookCommentEvent
         instagramAccountId: entry.id,
         commentId,
         commentText: value.text ?? "",
+        ...(value.timestamp && Number.isFinite(Date.parse(value.timestamp))
+          ? { commentCreatedAt: new Date(value.timestamp).toISOString() } : {}),
         commenterId,
         commenterName: value.from?.username,
         mediaId,

@@ -10,6 +10,7 @@ import {
   sendPrivateReplyWithButton,
   sendDirectMessageWithLinkButton,
   getRecentMediaComments,
+  getCommentCreatedAt,
   getUserFollowStatus,
   getUserMedia,
 } from "@/lib/instagram/provider";
@@ -280,3 +281,20 @@ it('treats a lost public-reply response as unconfirmed instead of safe to repeat
   await expect(sendCommentReply({ context, commentId: 'comment', postId: 'post', message: 'Thanks' })).rejects.toMatchObject({ name: 'ZernioDeliveryUnconfirmedError' });
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
+
+ describe("original comment date lookup", () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.stubGlobal("fetch", fetchMock); });
+  it("reads the requested Zernio comment rather than replies", async () => {
+    respond({ comment: { id: "comment", createdTime: "2026-05-01T00:00:00.123Z" }, comments: [{ id: "reply", createdTime: "2026-05-02T00:00:00Z" }] });
+    expect(await getCommentCreatedAt({ context, mediaId: "post", commentId: "comment" })).toBe("2026-05-01T00:00:00.123Z");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://zernio.com/api/v1/inbox/comments/post?accountId=selected&commentId=comment");
+  });
+  it("returns null for a missing comment", async () => {
+    respond({ comments: [] });
+    expect(await getCommentCreatedAt({ context, mediaId: "post", commentId: "comment" })).toBeNull();
+  });
+  it("does not swallow transient provider failures", async () => {
+    respond({}, 502);
+    await expect(getCommentCreatedAt({ context, mediaId: "post", commentId: "comment" })).rejects.toThrow();
+  });
+ });

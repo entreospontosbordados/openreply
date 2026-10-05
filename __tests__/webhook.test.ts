@@ -515,3 +515,10 @@ describe("parseReadEvents", () => {
     expect(parseReadEvents(payload)).toHaveLength(0);
   });
 });
+
+ describe("original comment timestamp", () => {
+  it.each([undefined, "invalid", "2026-04-30T21:00:00.123-03:00"])("uses only the comment timestamp: %s", (timestamp) => {
+    const [event] = parseCommentEvents({ object: "instagram", entry: [{ id: "owner", time: 9999999999, changes: [{ field: "comments", value: { id: "comment", text: "LINK", from: { id: "reader" }, media: { id: "post" }, timestamp } }] }] });
+    expect(event.commentCreatedAt).toBe(timestamp && timestamp !== "invalid" ? "2026-05-01T00:00:00.123Z" : undefined);
+  });
+ });

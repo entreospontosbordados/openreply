@@ -27,6 +27,8 @@ export interface ProcessCommentJob {
   instagramAccountId: string;
   commentId: string;
   commentText: string;
+  /** Original comment creation time, normalized to ISO UTC. */
+  commentCreatedAt?: string;
   commenterId: string;
   commenterName?: string;
   mediaId: string;

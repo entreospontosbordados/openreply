@@ -840,3 +840,17 @@ export async function debugToken(inputToken: string, accessToken: string) {
   const response = await fetch(url.toString());
   return handleResponse(response);
 }
+
+/** Read the original timestamp; only a confirmed missing object is terminal. */
+export async function getCommentCreatedAt(accessToken: string, commentId: string): Promise<string | null> {
+  const url = new URL(`${instagramGraphBase()}/${encodeURIComponent(commentId)}`);
+  url.searchParams.set("fields", "id,timestamp");
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  try {
+    const comment = await handleResponse<{ id?: string; timestamp?: string }>(response);
+    return comment.id === commentId ? comment.timestamp ?? null : null;
+  } catch (error) {
+    if (error instanceof MetaApiError && (error.code === 404 || (error.code === 100 && error.subcode === 33))) return null;
+    throw error;
+  }
+}

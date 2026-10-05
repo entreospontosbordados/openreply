@@ -446,5 +446,14 @@
   "{name} Campaign Report": "{name} 活動報表",
   "{type} post": "{type} 貼文",
   "”": "」",
-  "← Campaigns": "← 返回活動列表"
+  "← Campaigns": "← 返回活動列表",
+  "Comment polling": "留言輪詢",
+  "Lookback window": "回溯時間範圍",
+  "Limit per sweep": "每次掃描的上限",
+  "Loading polling settings...": "正在載入輪詢設定…",
+  "Polling setting unavailable": "無法取得設定",
+  "{count} hours": "{count} 小時",
+  "Considers recent comments, no earlier than the campaign creation date.": "檢查近期留言，但不早於活動建立時間。",
+  "Maximum new comments queued per campaign in each sweep.": "每次掃描中，每個活動可加入佇列的新留言數上限。",
+  "Read-only global settings from the web server environment. Change the environment variables and restart the web and worker services to apply changes.": "這些是來自網頁伺服器環境的唯讀全域設定。修改環境變數後，請重新啟動網頁與背景處理服務以套用變更。"
 }

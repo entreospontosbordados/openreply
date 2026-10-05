@@ -25,6 +25,7 @@ import {
   RateLimitError,
   TokenExpiredError,
   getUserFollowStatus,
+  getCommentCreatedAt,
   sendCommentReply,
   sendDirectMessage,
   sendDirectMessageWithButton,
@@ -310,7 +311,32 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     orderBy: { createdAt: "asc" },
   });
 
+  if (!automations.length) return;
+  let commentCreatedAt = job.data.commentCreatedAt;
+  if (commentCreatedAt === undefined) {
+    const context = await createInstagramContext(automations[0].instagramAccount);
+    commentCreatedAt = (await getCommentCreatedAt({ context, mediaId, commentId })) ?? undefined;
+    if (commentCreatedAt && Number.isFinite(Date.parse(commentCreatedAt))) {
+      commentCreatedAt = new Date(commentCreatedAt).toISOString();
+      const data = { ...job.data, commentCreatedAt };
+      await job.updateData(data);
+      job.data = data;
+    }
+  }
+  const commentCreatedMs = commentCreatedAt === undefined ? NaN : Date.parse(commentCreatedAt);
+  if (!Number.isFinite(commentCreatedMs)) {
+    console.debug("[DM Worker] Discarded comment", { reason: "missing_or_invalid_comment_date", commentId });
+    return;
+  }
+
   for (const automation of automations) {
+    if (commentCreatedMs < automation.createdAt.getTime()) {
+      console.debug("[DM Worker] Discarded comment", {
+        reason: "comment_predates_campaign", campaignId: automation.id, commentId,
+        commentCreatedAt, campaignCreatedAt: automation.createdAt.toISOString(),
+      });
+      continue;
+    }
     // "Any word" campaigns fire on every comment; otherwise require a keyword hit.
     const matchResult = automation.matchAnyWord
       ? { matched: true, matchedKeyword: null }

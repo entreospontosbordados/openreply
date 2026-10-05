@@ -60,6 +60,7 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 vi.mock("@/lib/meta/client", () => ({
+  getCommentCreatedAt: vi.fn().mockResolvedValue("2026-05-01T00:00:00.001Z"),
   sendPrivateReply: mockSendPrivateReply,
   sendPrivateReplyWithLinkButton: mockSendPrivateReplyWithLinkButton,
   sendPrivateReplyWithButton: mockSendPrivateReplyWithButton,
@@ -137,6 +138,7 @@ vi.mock("bullmq", () => {
   };
 });
 
+import { getCommentCreatedAt } from "@/lib/meta/client";
 import { MetaApiError, RateLimitError } from "@/lib/meta/client";
 import { createDMWorker } from "../lib/queue/dm-worker";
 import { getRedisConnection } from "@/lib/queue/client";
@@ -144,6 +146,7 @@ import { getRedisConnection } from "@/lib/queue/client";
 const usagePeriodStart = new Date("2026-05-01T00:00:00.000Z");
 
 const mockAutomation = {
+  createdAt: new Date("2026-05-01T00:00:00.000Z"),
   id: "auto_789",
   workspaceId: "workspace_123",
   instagramAccountId: "ig_account_row_1",
@@ -173,6 +176,7 @@ const mockAutomation = {
 };
 
 const mockJobData = {
+  commentCreatedAt: "2026-05-01T00:00:00.001Z",
   instagramAccountId: "ig_456",
   commentId: "comment_555",
   commentText: "I want the LINK!",
@@ -199,6 +203,7 @@ function getProcessor(): (job: {
 function createMockJob(data: Record<string, unknown> = mockJobData) {
   return {
     data,
+    updateData: vi.fn().mockResolvedValue(undefined),
     id: "job_001",
     attemptsMade: 0,
   };
@@ -1756,3 +1761,49 @@ it("retains the public reply claim if sending succeeded but its log write failed
   expect(sendCommentReply).toHaveBeenCalledTimes(1);
   expect(mockSendPrivateReply).toHaveBeenCalledTimes(1);
 });
+
+ describe("comment creation boundary", () => {
+  it.each(["2026-04-30T23:59:59.999Z", "invalid"])("discards %s before any delivery state", async (commentCreatedAt) => {
+    await getProcessor()(createMockJob({ ...mockJobData, commentCreatedAt }));
+    expect(mockMatchKeywords).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.dmLog.updateMany).not.toHaveBeenCalled();
+    expect(mockReserveDMSlot).not.toHaveBeenCalled();
+    expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+  it.each(["2026-05-01T00:00:00.000Z", "2026-04-30T21:00:00.000-03:00"])("accepts equality including offsets: %s", async (commentCreatedAt) => {
+    await getProcessor()(createMockJob({ ...mockJobData, commentCreatedAt }));
+    expect(mockMatchKeywords).toHaveBeenCalled();
+    expect(mockSendPrivateReply).toHaveBeenCalled();
+  });
+  it("retrieves and persists a legacy job date", async () => {
+    const job = createMockJob({ ...mockJobData, commentCreatedAt: undefined });
+    await getProcessor()(job);
+    expect(job.updateData).toHaveBeenCalledWith(expect.objectContaining({ commentCreatedAt: "2026-05-01T00:00:00.001Z" }));
+  });
+  it("keeps older campaigns eligible", async () => {
+    mockPrisma.automation.findMany.mockResolvedValue([
+      { ...mockAutomation, id: "newer", createdAt: new Date("2026-05-02") }, mockAutomation,
+    ]);
+    await getProcessor()(createMockJob());
+    expect(mockMatchKeywords).toHaveBeenCalledTimes(1);
+  });
+ });
+
+ describe("legacy comment timestamp lookup failures", () => {
+  it.each([null, "invalid"])("ends without delivery when the provider returns %s", async (timestamp) => {
+    vi.mocked(getCommentCreatedAt).mockResolvedValueOnce(timestamp);
+    await getProcessor()(createMockJob({ ...mockJobData, commentCreatedAt: undefined }));
+    expect(mockPrisma.dmLog.findUnique).not.toHaveBeenCalled();
+    expect(mockReserveDMSlot).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+  it("propagates transient errors for the existing queue retry", async () => {
+    vi.mocked(getCommentCreatedAt).mockRejectedValueOnce(new Error("temporary"));
+    await expect(getProcessor()(createMockJob({ ...mockJobData, commentCreatedAt: undefined }))).rejects.toThrow("temporary");
+    expect(mockPrisma.dmLog.upsert).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).not.toHaveBeenCalled();
+  });
+ });

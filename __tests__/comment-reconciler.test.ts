@@ -5,9 +5,9 @@
  * at those media too or a webhook Meta never delivers is lost for good.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockPrisma, queueAdd, readComments } = vi.hoisted(() => ({
+const { mockPrisma, queueAdd, readComments, readMedia } = vi.hoisted(() => ({
   mockPrisma: {
     $queryRaw: vi.fn(),
     automation: { findMany: vi.fn() },
@@ -16,6 +16,7 @@ const { mockPrisma, queueAdd, readComments } = vi.hoisted(() => ({
   },
   queueAdd: vi.fn(),
   readComments: vi.fn(),
+  readMedia: vi.fn(),
 }));
 vi.mock("@/lib/queue/client", () => ({
   getDMQueue: () => ({ add: queueAdd }),
@@ -27,6 +28,7 @@ vi.mock("@/lib/instagram/provider", async (importOriginal) => ({
     accessToken: "local-test",
   }),
   getRecentMediaComments: readComments,
+  getUserMedia: readMedia,
 }));
 
 vi.mock("@/lib/db/client", () => ({ prisma: mockPrisma }));
@@ -85,6 +87,7 @@ describe("comment polling does not recreate unsafe sends", () => {
       {
         id: "campaign",
         name: "Campaign",
+        createdAt: new Date(Date.now() - 30 * 60 * 1000),
         workspaceId: "workspace",
         postId: POST,
         matchAnyWord: false,
@@ -136,3 +139,44 @@ describe("comment polling does not recreate unsafe sends", () => {
     },
   );
 });
+
+ describe("campaign polling window", () => {
+  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-01T12:00:00Z"));
+    queueAdd.mockReset();
+    mockPrisma.$queryRaw.mockResolvedValue([{ mediaId: AD }]);
+    mockPrisma.dmLog.findMany.mockResolvedValue([]);
+    mockPrisma.operationalEvent.create.mockResolvedValue({});
+  });
+  it.each([30 / 60, 30 * 24])("applies the effective window to posts and ads for age %s hours", async (ageHours) => {
+    const createdAt = new Date(Date.now() - ageHours * 3600000);
+    const sinceMs = Math.max(createdAt.getTime(), Date.now() - 72 * 3600000);
+    mockPrisma.automation.findMany.mockResolvedValue([{ id: "campaign", name: "Campaign", createdAt, postId: POST, keywords: ["AI"], instagramAccount: { id: "connection", instagramId: "owner" } }]);
+    readComments.mockResolvedValue([
+      ...Array.from({ length: 35 }, (_, i) => ({ id: `old${i}`, text: "AI", from: { id: "reader" }, timestamp: new Date(sinceMs - 1).toISOString() })),
+      { id: "invalid", text: "AI", from: { id: "reader" }, timestamp: "invalid" },
+      { id: "equal", text: "AI", from: { id: "reader" }, timestamp: new Date(sinceMs).toISOString() },
+    ]);
+    await reconcileComments();
+    expect(readComments).toHaveBeenCalledWith(expect.objectContaining({ mediaId: POST, sinceMs }));
+    expect(readComments).toHaveBeenCalledWith(expect.objectContaining({ mediaId: AD, sinceMs }));
+    expect(queueAdd).toHaveBeenCalledTimes(2);
+    expect(queueAdd).toHaveBeenCalledWith("process-comment", expect.objectContaining({ commentId: "equal", commentCreatedAt: new Date(sinceMs).toISOString() }));
+    vi.restoreAllMocks();
+  });
+ });
+
+ it("uses the creation boundary for any-post campaigns", async () => {
+  queueAdd.mockReset();
+  const createdAt = new Date("2026-10-04T12:00:00.123Z");
+  vi.spyOn(Date, "now").mockReturnValue(createdAt.getTime() + 1800000);
+  mockPrisma.automation.findMany.mockResolvedValue([{ id: "any", name: "Any", createdAt, postId: null, matchAnyPost: true, matchAnyWord: true, instagramAccount: { id: "connection", instagramId: "owner" } }]);
+  readMedia.mockResolvedValue([{ id: POST }]);
+  readComments.mockResolvedValue([{ id: "new", text: "AI", timestamp: createdAt.toISOString(), from: { id: "reader" } }]);
+  mockPrisma.dmLog.findMany.mockResolvedValue([]);
+  await reconcileComments();
+  expect(readComments).toHaveBeenLastCalledWith(expect.objectContaining({ mediaId: POST, sinceMs: createdAt.getTime() }));
+  expect(queueAdd).toHaveBeenCalledTimes(1);
+  vi.restoreAllMocks();
+ });

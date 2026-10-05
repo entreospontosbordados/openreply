@@ -1,5 +1,5 @@
 import * as meta from "@/lib/meta/client";
-import { zernioRequest } from "@/lib/zernio/client";
+import { ZernioApiError, zernioRequest } from "@/lib/zernio/client";
 import type { InstagramContext } from "./context";
 
 type Comment = {
@@ -149,4 +149,21 @@ export async function getUserInfo({
       ? { followers_count: account.followersCount }
       : {}),
   };
+}
+
+export async function getCommentCreatedAt({ context, mediaId, commentId }: {
+  context: InstagramContext; mediaId: string; commentId: string;
+}): Promise<string | null> {
+  if (context.provider === "META") return meta.getCommentCreatedAt(context.accessToken, commentId);
+  const query = new URLSearchParams({ accountId: context.accountId, commentId });
+  try {
+    const result = await zernioRequest<{ comment?: { id?: string; createdTime?: string } | null }>({
+      apiKey: context.apiKey,
+      path: `/inbox/comments/${encodeURIComponent(mediaId)}?${query}`,
+    });
+    return result.comment?.id === commentId ? result.comment.createdTime ?? null : null;
+  } catch (error) {
+    if (error instanceof ZernioApiError && error.code === 404) return null;
+    throw error;
+  }
 }

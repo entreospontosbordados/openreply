@@ -40,13 +40,14 @@ import {
   type InstagramContext,
 } from "@/lib/instagram/provider";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
+import { getCommentPollingConfig } from "@/lib/polling/config";
 
 // Only consider comments from the last few days — older ones are outside
 // Instagram's private-reply window anyway, so a DM to them would just fail.
-const LOOKBACK_HOURS = Number(process.env.COMMENT_POLL_LOOKBACK_HOURS ?? 72);
 // Hard cap on how many new comments a single campaign can enqueue per sweep, so
 // a viral post drains gradually instead of bursting into the comment API.
-const MAX_NEW_PER_SWEEP = Number(process.env.COMMENT_POLL_MAX_PER_SWEEP ?? 30);
+const { lookbackHours: LOOKBACK_HOURS, maxPerSweep: MAX_NEW_PER_SWEEP } =
+  getCommentPollingConfig();
 // For "any post" campaigns, how many recent posts to scan.
 const RECENT_MEDIA_LIMIT = 10;
 
@@ -73,6 +74,7 @@ export async function reconcileComments(): Promise<void> {
     select: {
       id: true,
       name: true,
+      createdAt: true,
       postId: true,
       matchAnyPost: true,
       matchAnyWord: true,
@@ -100,7 +102,7 @@ export async function reconcileComments(): Promise<void> {
   for (const automation of automations) {
     const stat = await sweepCampaign({
       automation: automation,
-      sinceMs: sinceMs,
+      sinceMs: Math.max(sinceMs, automation.createdAt.getTime()),
       tokenCache: tokenCache,
     }).catch(
       (error): SweepStat => ({
@@ -124,6 +126,7 @@ async function sweepCampaign({
   automation: {
     id: string;
     name: string;
+    createdAt: Date;
     postId: string | null;
     matchAnyPost: boolean;
     matchAnyWord: boolean;
@@ -207,6 +210,15 @@ async function sweepCampaign({
     // Keep only comments that (a) aren't the account's own, (b) match the
     // keyword, and (c) have no reply from the account owner yet.
     const needsAction = comments.filter((c) => {
+      const timestampMs = Date.parse(c.timestamp);
+      if (!Number.isFinite(timestampMs) || timestampMs < sinceMs) {
+        console.debug("[Comment sweep] Discarded comment", {
+          reason: "outside_campaign_window_or_invalid_date",
+          campaignId: automation.id, commentId: c.id,
+          commentCreatedAt: c.timestamp, campaignCreatedAt: automation.createdAt.toISOString(), sinceMs,
+        });
+        return false;
+      }
       const authorId = c.from?.id;
       if (!authorId || authorId === account.instagramId) return false;
 
@@ -273,6 +285,7 @@ async function sweepCampaign({
         instagramAccountId: account.instagramId,
         accountConnectionId: account.id,
         commentId: c.id,
+        commentCreatedAt: new Date(c.timestamp).toISOString(),
         commentText: c.text ?? "",
         commenterId: c.from!.id,
         commenterName: c.from?.username,
